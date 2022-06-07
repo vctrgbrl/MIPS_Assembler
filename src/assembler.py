@@ -48,7 +48,8 @@ class Assembler:
 		"bne"	: (0x05,),
 		"lw"	: (0x23,),
 		"sw"	: (0x2B,),
-		"j"		: (0x2,)
+		"j"		: (0x2,),
+		"jal"	: (0x3,)
 	}
 
 	r_set = {
@@ -59,12 +60,16 @@ class Assembler:
 		"addi", "beq", "bne", "lw", "sw"
 	}
 
+	data_set = {
+		"lw", "sw"
+	}
+
 	j_set = {
-		"j"
+		"j", "jal"
 	}
 
 	tag_set = {
-		"beq", "bne", "j"
+		"beq", "bne", "j", "jal"
 	}
 	
 	def __init__(self):
@@ -76,13 +81,15 @@ class Assembler:
 
 	def assemble_r_type(self, inst: list) -> int:
 		machine_code = 0x00000000
+		machine_code |= self.instructions[inst[0]][0] << 26 # opcode
 		if inst[0] == 'jr':
 			return machine_code | self.reg_bank[inst[1]] << 20 # rs
 		machine_code |= self.reg_bank[inst[2]] << 20 # rs
 		machine_code |= self.reg_bank[inst[1]] << 11 # rd
-		machine_code |= self.reg_bank[inst[3]] << 16 # rt
-		machine_code |= self.instructions[inst[0]][0] << 26 # opcode
 		machine_code |= self.instructions[inst[0]][1] # funct
+		if inst[0] == 'sll' or inst[0] == 'srl':
+			return machine_code | ( (int(inst[3]) & 0b11111) << 6 )
+		machine_code |= self.reg_bank[inst[3]] << 16 # rt
 		return machine_code
 
 	def assemble_i_type(self, inst: list) -> int:
@@ -96,8 +103,13 @@ class Assembler:
 	def assemble_j_type(self, inst: list) -> int:
 		machine_code = 0x00000000
 		machine_code |= self.instructions[inst[0]][0] << 26
-		machine_code |= 26 & int(inst[1])
+		machine_code |= 0b11111111_111111111111_111111 & int(inst[1])
 		return machine_code
+
+	def preprocess_data_type(self, inst: list) -> int:
+		num, reg = inst[2].split('(')
+		inst[2] = reg[0:-1]
+		inst.append(int(num))
 
 	def assemble_instruction(self, inst: list) -> int:
 		machine_code = 0x00000000
@@ -126,6 +138,8 @@ class Assembler:
 		elif opcode in self.i_set:
 			if uses_tag:
 				inst[len(inst)-1] -= self.line_number
+			elif opcode in self.data_set:
+				self.preprocess_data_type(inst)
 			machine_code = self.assemble_i_type(inst)
 		elif opcode in self.j_set:
 			machine_code = self.assemble_j_type(inst)
@@ -181,48 +195,52 @@ class Assembler:
 					self.machine_codes[self.line_number - 1] =  machine_code
 		self.line_number = prev_line_number
 
-	def print_machine_code(self, machine_code: int) -> None:
+fib_asm = """
+.text
+	addi $v0, $zero, 5
+	
+	add $a0, $zero, $v0
+	jal FIB
+	
+	add $a0, $zero, $v0
+	addi $v0, $zero, 1
+	
+	addi $v0, $zero, 10
+	
+FIB:
 
-		opcode = (machine_code & 0b111111_00000_00000_00000_00000_000000) >> 26
-		if opcode == 0:
-			rs = 	(machine_code & 0b000000_11111_00000_00000_00000_000000) >> 21
-			rt = 	(machine_code & 0b000000_00000_11111_00000_00000_000000) >> 16
-			rd = 	(machine_code & 0b000000_00000_00000_11111_00000_000000) >> 11
-			shamt =	(machine_code & 0b000000_00000_00000_00000_11111_000000) >> 6
-			funct =	(machine_code & 0b000000_00000_00000_00000_00000_111111)
-			print(f"R: {opcode}, {rs}, {rt}, {rd}, {funct}")
-		elif opcode in {8,4,5,0x23,0x2B}:
-			rs =	(machine_code & 0b000000_11111_00000_0000000000000000) >> 21
-			rt =	(machine_code & 0b000000_00000_11111_0000000000000000) >> 16
-			i =		(machine_code & 0b000000_00000_00000_1111111111111111)
-			print(f"I: {opcode}, {rs}, {rt}, {i}")
-		elif opcode == 2:
-			addr = 0b000000_1111111111_1111111111_111111
-			print(f"J: {opcode}, {addr}")
+	addi $sp, $sp, -12
+	sw $a0, +0($sp)
+	sw $ra, +4($sp)
+	
+	addi $t1, $zero, 1
+	beq $a0, $zero, ZER 
+	beq $a0, $t1, ONE
 
-asm_1 = """
-	addi $t0, $zero, 4
-	addi $t1, $zero, 0
-LOOP:
-	addi $t0, $zero, 1
-	bne $t0, $t1, LOOP
-"""
-# 8, 
-asm_2 = """
-	beq $t1, $t2, IF
-	addi $t0, $t0, 1
-	j EXIT
-IF: addi $v0, $v0, 2
-EXIT:
+	addi $a0, $a0, -1
+	jal FIB
+	sw $v0, +8($sp)
+	
+	lw $a0, +0($sp)
+	addi $a0, $a0, -2
+	jal FIB
+	lw $t0, +8($sp)
+	add $v0, $t0, $v0
+RETURN:
+	lw $ra, +4($sp)
+	addi $sp, $sp, +12
 	jr $ra
+	
+ZER:
+	add $v0, $zero, $zero
+	j RETURN
+ONE:
+	addi $v0, $zero, 1
+	j RETURN
 """
-# 4, 10, 9, 2
-# 8, 9, 0,  0
-# 2, 3
-# 8, 8, 0,  1
-# 0, 2, 0, 0
 
 assembler = Assembler()
-exe = assembler.assemble_program(asm_2)
+exe = assembler.assemble_program(fib_asm)
 for e in exe:
-	assembler.print_machine_code(e)
+	h = hex(e)
+	print(h)
