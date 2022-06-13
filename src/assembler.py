@@ -1,3 +1,5 @@
+from sys import argv
+
 class Assembler:
 
 	reg_bank = {
@@ -82,14 +84,15 @@ class Assembler:
 	def assemble_r_type(self, inst: list) -> int:
 		machine_code = 0x00000000
 		machine_code |= self.instructions[inst[0]][0] << 26 # opcode
-		if inst[0] == 'jr':
-			return machine_code | self.reg_bank[inst[1]] << 20 # rs
-		machine_code |= self.reg_bank[inst[2]] << 20 # rs
-		machine_code |= self.reg_bank[inst[1]] << 11 # rd
 		machine_code |= self.instructions[inst[0]][1] # funct
+		if inst[0] == 'jr':
+			return machine_code | self.reg_bank[inst[1]] << 21 # rs
+		machine_code |= self.reg_bank[inst[1]] << 11 # rd
 		if inst[0] == 'sll' or inst[0] == 'srl':
+			machine_code |= self.reg_bank[inst[2]] << 16 # rt
 			return machine_code | ( (int(inst[3]) & 0b11111) << 6 )
 		machine_code |= self.reg_bank[inst[3]] << 16 # rt
+		machine_code |= self.reg_bank[inst[2]] << 21 # rs
 		return machine_code
 
 	def assemble_i_type(self, inst: list) -> int:
@@ -137,7 +140,7 @@ class Assembler:
 			machine_code = self.assemble_r_type(inst)
 		elif opcode in self.i_set:
 			if uses_tag:
-				inst[len(inst)-1] -= self.line_number
+				inst[len(inst)-1] -= self.line_number + 1
 			elif opcode in self.data_set:
 				self.preprocess_data_type(inst)
 			machine_code = self.assemble_i_type(inst)
@@ -159,19 +162,19 @@ class Assembler:
 
 			# TAG:
 			if line_split[0].endswith(':') and len(line_split) == 1:
-				tag = line_split[0][0:-1]
+				tag = line_split[0][0:-1].lower()
 				self.defined_tags[tag] = self.line_number
 				self.solve_tag_dependency(tag)
 
 			# TAG: opcode arg, arg, arg
 			elif line_split[0].endswith(':'):
-				tag = line_split[0][0:-1]
+				tag = line_split[0][0:-1].lower()
 				self.defined_tags[tag] = self.line_number
 
 				sp = line_split[1].split(" ", 1)
 				opcode = sp[0].lower()
 
-				inst = sp[1].replace(' ', '').split(',')
+				inst = sp[1].replace(' ', '').lower().split(',')
 				inst.insert(0, opcode)
 				machine_code = self.assemble_instruction(inst)
 				self.machine_codes.append(machine_code)
@@ -179,8 +182,8 @@ class Assembler:
 
 			# opcode arg, arg, arg
 			elif line_split[0].lower() in self.instructions:
-				inst = line_split[1].replace(' ','').split(',')
-				inst.insert(0, line_split[0])
+				inst = line_split[1].replace(' ','').lower().split(',')
+				inst.insert(0, line_split[0].lower())
 				machine_code = self.assemble_instruction(inst)
 				self.machine_codes.append(machine_code)
 			
@@ -195,52 +198,15 @@ class Assembler:
 					self.machine_codes[self.line_number - 1] =  machine_code
 		self.line_number = prev_line_number
 
-fib_asm = """
-.text
-	addi $v0, $zero, 5
-	
-	add $a0, $zero, $v0
-	jal FIB
-	
-	add $a0, $zero, $v0
-	addi $v0, $zero, 1
-	
-	addi $v0, $zero, 10
-	
-FIB:
+if __name__ == "__main__":
+	fib_asm = open(argv[1]).read()
 
-	addi $sp, $sp, -12
-	sw $a0, +0($sp)
-	sw $ra, +4($sp)
+	assembler = Assembler()
+	exe = assembler.assemble_program(fib_asm)
 	
-	addi $t1, $zero, 1
-	beq $a0, $zero, ZER 
-	beq $a0, $t1, ONE
-
-	addi $a0, $a0, -1
-	jal FIB
-	sw $v0, +8($sp)
-	
-	lw $a0, +0($sp)
-	addi $a0, $a0, -2
-	jal FIB
-	lw $t0, +8($sp)
-	add $v0, $t0, $v0
-RETURN:
-	lw $ra, +4($sp)
-	addi $sp, $sp, +12
-	jr $ra
-	
-ZER:
-	add $v0, $zero, $zero
-	j RETURN
-ONE:
-	addi $v0, $zero, 1
-	j RETURN
-"""
-
-assembler = Assembler()
-exe = assembler.assemble_program(fib_asm)
-for e in exe:
-	h = hex(e)
-	print(h)
+	file = open(argv[1][:-4] + ".bin", 'xb')
+	for i in exe:
+		file.write(
+			i.to_bytes(4, byteorder="little")
+		)
+	file.close()
